@@ -43,7 +43,7 @@ services:
       - ${POSTGRES_HOST_ADDRESS:?'POSTGRES_HOST_ADDRESS is required'}:${POSTGRES_HOST_PORT:?'POSTGRES_HOST_PORT is required'}:${CONST_POSTGRESQL_DEFAULT_PORT:?'CONST_POSTGRESQL_DEFAULT_PORT is required'}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/app/data/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/app/data/init.sql:/docker-entrypoint-initdb.d/init.sql:Z
     healthcheck:
       test:
         [
@@ -82,7 +82,7 @@ services:
     ports:
       - ${CADDY_HOST_ADDRESS:?'CADDY_HOST_ADDRESS is required'}:${CADDY_HOST_PORT:?'CADDY_HOST_PORT is required'}:${CADDY_CONTAINER_PORT}
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:Z
 
 volumes:
   postgres_data:
