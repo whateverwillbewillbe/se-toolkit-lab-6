@@ -382,7 +382,7 @@ The benchmark tests 10 questions across all categories:
 
 ### Benchmark Results
 
-**Final Score:** 6/10 passed on local benchmark
+**Final Score:** 10/10 passed on local benchmark ✓
 
 **Breakdown:**
 
@@ -392,14 +392,17 @@ The benchmark tests 10 questions across all categories:
 - ✓ Q4: API routers - Used list_files on routers/
 - ✓ Q5: Items count (API) - Used query_api with auth
 - ✓ Q6: Status code without auth - Used query_api with include_auth=false
-- ✗ Q7: Bug diagnosis - Agent found error but source field not captured
-- ⏸ Q8-10: Request lifecycle, ETL idempotency - Not reached
+- ✓ Q7: Bug diagnosis (ZeroDivisionError) - Used query_api + read_file
+- ✓ Q8: Top-learners bug (TypeError) - Used query_api + read_file
+- ✓ Q9: Request lifecycle - Used read_file on docker-compose.yml + Dockerfile
+- ✓ Q10: ETL idempotency - Used read_file on etl.py
 
-**Lessons from failures:**
+**Lessons learned:**
 
-- Bug diagnosis questions require careful source tracking across multiple tool calls
-- API availability can affect benchmark runs
-- LLM API latency sometimes causes timeouts (increased timeout to 120s)
+- Bug diagnosis questions require explicit instructions to read source code
+- The system prompt must specify that source MUST be a file path for bug questions
+- Query parameters must be included in API calls (e.g., ?lab=lab-99)
+- Loop detection prevents infinite retries when LLM can't find information
 
 ### Final Architecture
 
