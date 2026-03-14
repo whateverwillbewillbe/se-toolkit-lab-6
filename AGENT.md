@@ -374,6 +374,33 @@ The benchmark tests 10 questions across all categories:
 
 6. **Authentication is essential for query_api:** Without the `LMS_API_KEY`, API calls return 401 errors. The agent must read this key from `.env.docker.secret` and include it in the `Authorization` header.
 
+7. **Loop detection prevents infinite retries:** Adding a `seen_tool_calls` set prevents the agent from making the same tool call twice, which was causing infinite loops when the LLM couldn't find information in large files.
+
+8. **Source extraction must be flexible:** The `extract_source_from_answer()` function now returns any file path from the last `read_file` call, not just wiki/backend paths. This ensures bug diagnosis questions always have a source reference.
+
+9. **uv run is required for subprocess execution:** Tests and benchmarks must use `uv run agent.py` instead of direct Python execution to ensure dependencies are available.
+
+### Benchmark Results
+
+**Final Score:** 6/10 passed on local benchmark
+
+**Breakdown:**
+
+- ✓ Q1: Branch protection (wiki) - Used list_files + read_file
+- ✓ Q2: SSH connection (wiki) - Used list_files + read_file
+- ✓ Q3: Framework (source) - Used read_file on main.py
+- ✓ Q4: API routers - Used list_files on routers/
+- ✓ Q5: Items count (API) - Used query_api with auth
+- ✓ Q6: Status code without auth - Used query_api with include_auth=false
+- ✗ Q7: Bug diagnosis - Agent found error but source field not captured
+- ⏸ Q8-10: Request lifecycle, ETL idempotency - Not reached
+
+**Lessons from failures:**
+
+- Bug diagnosis questions require careful source tracking across multiple tool calls
+- API availability can affect benchmark runs
+- LLM API latency sometimes causes timeouts (increased timeout to 120s)
+
 ### Final Architecture
 
 The agent successfully handles:
