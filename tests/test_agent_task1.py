@@ -27,12 +27,12 @@ def run_agent_basic(question: str) -> dict:
     project_root = Path(__file__).parent.parent
     agent_path = project_root / "agent.py"
 
-    # Run agent.py as subprocess
+    # Run agent.py as subprocess using uv
     result = subprocess.run(
-        [sys.executable, "-m", "uv", "run", str(agent_path), question],
+        ["uv", "run", str(agent_path), question],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=timeout,
     )
 
     # Print stderr for debugging (won't affect test result)

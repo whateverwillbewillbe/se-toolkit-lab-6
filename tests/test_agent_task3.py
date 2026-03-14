@@ -1,10 +1,10 @@
 """
-Regression tests for Task 2: The Documentation Agent
+Regression tests for Task 3: The System Agent
 
 Tests verify that agent.py:
-1. Uses tools (read_file, list_files) to answer questions
+1. Uses appropriate tools (read_file, query_api) for system questions
 2. Outputs valid JSON with required fields: answer, source, tool_calls
-3. Correctly cites wiki sources
+3. Correctly identifies sources for different question types
 """
 
 import json
@@ -13,12 +13,13 @@ import sys
 from pathlib import Path
 
 
-def run_agent(question: str) -> dict:
+def run_agent(question: str, timeout: int = 120) -> dict:
     """
     Run agent.py with a question and return parsed output.
 
     Args:
         question: The question to ask the agent
+        timeout: Timeout in seconds (default 120 for agentic loop)
 
     Returns:
         Parsed JSON output from agent
@@ -31,6 +32,7 @@ def run_agent(question: str) -> dict:
     agent_path = project_root / "agent.py"
 
     # Run agent.py as subprocess using uv
+    # Use "uv run agent.py" directly (uv handles the Python interpreter)
     result = subprocess.run(
         ["uv", "run", str(agent_path), question],
         capture_output=True,
@@ -77,16 +79,17 @@ def validate_output(output: dict) -> None:
     assert isinstance(output["tool_calls"], list), "'tool_calls' field must be an array"
 
 
-def test_merge_conflict_question():
+def test_framework_question():
     """
-    Test that agent uses read_file to answer a merge conflict question.
+    Test that agent uses read_file to answer a framework question.
 
     Expected behavior:
-    - Agent uses list_files to explore wiki directory
-    - Agent uses read_file to read git-workflow.md
-    - Source references wiki/git-workflow.md
+    - Agent uses list_files or read_file to explore backend structure
+    - Agent reads pyproject.toml or backend/app/main.py
+    - Answer contains "FastAPI"
+    - Source references a backend file
     """
-    question = "How do you resolve a merge conflict?"
+    question = "What framework does the backend use?"
 
     output = run_agent(question)
     validate_output(output)
@@ -98,22 +101,29 @@ def test_merge_conflict_question():
     tool_names = [tc.get("tool") for tc in output["tool_calls"]]
     assert "read_file" in tool_names, "Agent should use read_file tool"
 
-    # Check that source references git-workflow.md
+    # Check that answer contains FastAPI
+    answer_lower = output["answer"].lower()
+    assert "fastapi" in answer_lower, (
+        f"Answer should mention FastAPI, got: {output['answer']}"
+    )
+
+    # Check that source references backend or pyproject.toml
     source = output["source"].lower()
-    assert "git-workflow" in source or "git" in source, (
-        f"Source should reference git-workflow.md, got: {output['source']}"
+    assert "backend" in source or "pyproject" in source, (
+        f"Source should reference backend file, got: {output['source']}"
     )
 
 
-def test_wiki_listing_question():
+def test_query_api_question():
     """
-    Test that agent uses list_files to answer a wiki listing question.
+    Test that agent uses query_api to answer a data question.
 
     Expected behavior:
-    - Agent uses list_files to explore wiki directory
-    - tool_calls contains list_files with path "wiki"
+    - Agent uses query_api to get data from backend
+    - tool_calls contains query_api with GET method
+    - Answer contains a number (item count, etc.)
     """
-    question = "What files are in the wiki?"
+    question = "How many items are in the database?"
 
     output = run_agent(question)
     validate_output(output)
@@ -121,24 +131,30 @@ def test_wiki_listing_question():
     # Check that tool_calls is not empty
     assert len(output["tool_calls"]) > 0, "Agent should use tools for this question"
 
-    # Check that list_files was used
+    # Check that query_api was used
     tool_names = [tc.get("tool") for tc in output["tool_calls"]]
-    assert "list_files" in tool_names, "Agent should use list_files tool"
+    assert "query_api" in tool_names, "Agent should use query_api tool"
 
-    # Check that list_files was called with wiki path
-    list_files_calls = [
-        tc for tc in output["tool_calls"] if tc.get("tool") == "list_files"
+    # Check that query_api was called with GET method
+    query_api_calls = [
+        tc for tc in output["tool_calls"] if tc.get("tool") == "query_api"
     ]
-    wiki_paths = [tc.get("args", {}).get("path", "") for tc in list_files_calls]
-    assert any("wiki" in path for path in wiki_paths), (
-        f"list_files should be called with wiki path, got: {wiki_paths}"
+    methods = [tc.get("args", {}).get("method", "") for tc in query_api_calls]
+    assert any(m.upper() == "GET" for m in methods), (
+        f"query_api should be called with GET method, got: {methods}"
     )
+
+    # Check that answer contains a number
+    import re
+
+    numbers = re.findall(r"\d+", output["answer"])
+    assert len(numbers) > 0, f"Answer should contain a number, got: {output['answer']}"
 
 
 if __name__ == "__main__":
-    print("Running Task 2 tests...")
-    test_merge_conflict_question()
-    print("✓ test_merge_conflict_question passed")
-    test_wiki_listing_question()
-    print("✓ test_wiki_listing_question passed")
-    print("All Task 2 tests passed!")
+    print("Running Task 3 tests...")
+    test_framework_question()
+    print("✓ test_framework_question passed")
+    test_query_api_question()
+    print("✓ test_query_api_question passed")
+    print("All Task 3 tests passed!")
