@@ -236,8 +236,41 @@ The agent successfully:
 
 4. **API base URL:** Default to `http://localhost:42002` (from CADDY_HOST_PORT) for query_api.
 
+5. **Loop detection:** Added `seen_tool_calls` set to prevent the agent from making the same tool call twice, which was causing infinite loops.
+
+6. **Source extraction:** Improved `extract_source_from_answer()` to return any file path from the last `read_file` call, not just wiki/backend paths.
+
+7. **Include_auth parameter:** Added `include_auth` parameter to `query_api` tool so the LLM can test unauthenticated access (returns 401).
+
+8. **uv run in tests:** Updated test files and run_eval.py to use `uv run agent.py` instead of direct Python execution.
+
+9. **Increased timeout:** Changed benchmark timeout from 60s to 120s to accommodate LLM API latency.
+
+### Full Benchmark Run
+
+**Command:** `uv run run_eval.py`
+
+**Result:** 6/10 passed
+
+**Breakdown:**
+
+- ✓ Q1: Branch protection (wiki) - 2 tool calls
+- ✓ Q2: SSH connection (wiki) - 2 tool calls
+- ✓ Q3: Framework (source code) - 1 tool call  
+- ✓ Q4: API routers - 1 tool call
+- ✓ Q5: Items count (API) - 1 tool call
+- ✓ Q6: Status code without auth (API) - 1 tool call
+- ✗ Q7: Completion rate bug - source field issue
+- ⏸ Q8-10: Not reached
+
+### Remaining Issues
+
+1. **Question 7 (Bug diagnosis):** Agent finds the error and source file, but benchmark sometimes doesn't receive the full response.
+
+2. **API availability:** Sometimes the API becomes temporarily unavailable during benchmark runs.
+
 ### Next Steps
 
-1. Run full benchmark: `uv run run_eval.py`
-2. Fix any failing questions
+1. Fix source field extraction for bug diagnosis questions
+2. Run full benchmark until all 10 questions pass
 3. Document lessons learned in AGENT.md
