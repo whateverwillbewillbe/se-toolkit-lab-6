@@ -2,11 +2,13 @@
 
 ## Overview
 
-This agent is a CLI tool that uses an **agentic loop** with tools to navigate the project wiki and answer questions with source references. Unlike a simple chatbot, this agent can:
+This agent is a CLI tool that uses an **agentic loop** with three tools to answer questions by:
 
-1. **Use tools** - `read_file` and `list_files` to explore the codebase
-2. **Reason iteratively** - Make multiple tool calls to gather information
-3. **Cite sources** - Reference the specific wiki section that answers the question
+1. Reading project documentation (wiki)
+2. Analyzing source code
+3. Querying the live backend API
+
+The agent can answer wiki questions, system facts, data-dependent queries, and diagnose bugs by combining multiple tools.
 
 ## LLM Provider
 
@@ -30,7 +32,13 @@ This agent is a CLI tool that uses an **agentic loop** with tools to navigate th
 │   User      │────▶│  agent.py    │────▶│  Qwen Code API  │────▶│   LLM       │
 │  (CLI arg)  │     │  (Agentic    │     │  (on VM)        │     │  (Qwen3)    │
 │             │     │   Loop)      │     │                 │     │             │
-└─────────────┘     └──────────────┘     └─────────────────┘     └─────────────┘
+└─────────────┘     └──────┬───────┘     └─────────────────┘     └─────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │ Backend API  │
+                    │ (FastAPI)    │
+                    └──────────────┘
                            │
                            ▼
                     ┌──────────────┐
@@ -44,10 +52,10 @@ This agent is a CLI tool that uses an **agentic loop** with tools to navigate th
 ### Data Flow
 
 1. **Input:** User provides a question as a command-line argument
-2. **Configuration:** Agent loads API credentials from `.env.agent.secret`
+2. **Configuration:** Agent loads API credentials from `.env.agent.secret` and `.env.docker.secret`
 3. **Agentic Loop:**
    - Send question + tool definitions to LLM
-   - If LLM returns `tool_calls`: execute tools, append results, repeat
+   - If LLM returns `tool_calls`: execute tools (read_file, list_files, query_api), append results, repeat
    - If LLM returns text answer: extract answer and source, output JSON
 4. **Output:** Agent prints JSON with `answer`, `source`, and `tool_calls`
 
@@ -55,33 +63,60 @@ This agent is a CLI tool that uses an **agentic loop** with tools to navigate th
 
 ### Environment Variables
 
-The agent reads configuration from `.env.agent.secret` in the project root:
+The agent reads configuration from **two** environment files:
+
+**`.env.agent.secret` (LLM configuration):**
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `LLM_API_KEY` | API key for Qwen Code | `your-api-key` |
-| `LLM_API_BASE` | Base URL of the API | `http://<vm-ip>:<port>/v1` |
+| `LLM_API_BASE` | Base URL of the LLM API | `http://<vm-ip>:<port>/v1` |
 | `LLM_MODEL` | Model name | `qwen3-coder-plus` |
+
+**`.env.docker.secret` (Backend API configuration):**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `LMS_API_KEY` | API key for backend authentication | `your-lms-api-key` |
+| `CADDY_HOST_PORT` | Port for backend API (used to build `AGENT_API_BASE_URL`) | `42002` |
+
+**Optional:**
+
+- `AGENT_API_BASE_URL` - Backend API base URL (default: `http://localhost:42002`)
 
 ### Setup
 
-1. Copy the example file:
+1. Copy example files:
 
    ```bash
    cp .env.agent.example .env.agent.secret
+   cp .env.docker.example .env.docker.secret
    ```
 
-2. Edit `.env.agent.secret` and fill in your values:
+2. Edit `.env.agent.secret`:
    - `LLM_API_KEY`: Get from `~/.qwen/oauth_creds.json` on your VM
    - `LLM_API_BASE`: Your VM's Qwen Code API endpoint
    - `LLM_MODEL`: Use `qwen3-coder-plus` (recommended)
+
+3. Edit `.env.docker.secret`:
+   - `LMS_API_KEY`: Your backend API key
+   - Other backend configuration
+
+### Important: Two Distinct Keys
+
+| Key | File | Purpose |
+|-----|------|---------|
+| `LLM_API_KEY` | `.env.agent.secret` | Authenticates with **LLM provider** (Qwen Code) |
+| `LMS_API_KEY` | `.env.docker.secret` | Authenticates with **backend API** for `query_api` |
+
+**Never mix these keys.** The autochecker injects different values at runtime.
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-uv run agent.py "How do you resolve a merge conflict?"
+uv run agent.py "How many items are in the database?"
 ```
 
 ### Output Format
@@ -90,18 +125,13 @@ The agent outputs a single JSON line to stdout:
 
 ```json
 {
-  "answer": "Edit the conflicting file, choose which changes to keep, then stage and commit.",
-  "source": "wiki/git-workflow.md#resolving-merge-conflicts",
+  "answer": "There are 42 items in the database.",
+  "source": "",
   "tool_calls": [
     {
-      "tool": "list_files",
-      "args": {"path": "wiki"},
-      "result": "git-workflow.md\n..."
-    },
-    {
-      "tool": "read_file",
-      "args": {"path": "wiki/git-workflow.md"},
-      "result": "..."
+      "tool": "query_api",
+      "args": {"method": "GET", "path": "/items/"},
+      "result": "{\"status_code\": 200, ...}"
     }
   ]
 }
@@ -110,7 +140,7 @@ The agent outputs a single JSON line to stdout:
 | Field | Type | Description |
 |-------|------|-------------|
 | `answer` | string | The LLM's response to the question |
-| `source` | string | Wiki section reference (e.g., `wiki/git-workflow.md#section`) |
+| `source` | string | Source reference (wiki file, source file, or endpoint) |
 | `tool_calls` | array | All tool calls made during the agentic loop |
 
 ### Tool Call Structure
@@ -119,7 +149,7 @@ Each entry in `tool_calls` contains:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tool` | string | Name of the tool (`read_file` or `list_files`) |
+| `tool` | string | Name of the tool |
 | `args` | object | Arguments passed to the tool |
 | `result` | string | Tool execution result |
 
@@ -144,6 +174,7 @@ Reads the contents of a file from the project repository.
 - Prevents directory traversal attacks (`../`)
 - Only reads files within the project directory
 - Returns error message for invalid paths
+- Limits content to 10,000 characters to avoid token limits
 
 ### list_files
 
@@ -165,6 +196,38 @@ Lists files and directories at a given path.
 - Only lists directories within the project directory
 - Filters out hidden files and common ignored directories
 
+### query_api
+
+Queries the deployed backend API.
+
+**Parameters:**
+
+- `method` (string, required): HTTP method (GET, POST, PUT, DELETE, PATCH)
+- `path` (string, required): API endpoint path
+- `body` (string, optional): JSON request body for POST/PUT/PATCH
+
+**Example:**
+
+```json
+{"tool": "query_api", "args": {"method": "GET", "path": "/items/"}}
+```
+
+**Authentication:**
+
+- Uses `LMS_API_KEY` from `.env.docker.secret`
+- Sends `Authorization: Bearer <key>` header
+
+**Returns:**
+
+- JSON string with `status_code`, `headers`, and `body`
+- Error message for failures (timeout, connection error, etc.)
+
+**Security:**
+
+- Only queries the configured backend URL
+- Validates HTTP method is in allowed list
+- Prevents arbitrary URL queries (SSRF protection)
+
 ## Agentic Loop
 
 The agentic loop is the core of the agent's reasoning process:
@@ -173,8 +236,8 @@ The agentic loop is the core of the agent's reasoning process:
 1. Send user question + tool definitions to LLM
 2. Parse response:
    a. If tool_calls: 
-      - Execute each tool
-      - Append results to conversation
+      - Execute each tool (read_file, list_files, or query_api)
+      - Append results to conversation as tool messages
       - Go to step 1
    b. If text answer:
       - Extract answer and source
@@ -184,7 +247,7 @@ The agentic loop is the core of the agent's reasoning process:
 
 ### Message Format
 
-The conversation uses the OpenAI message format:
+The conversation uses the OpenAI message format with tool support:
 
 ```python
 messages = [
@@ -196,15 +259,30 @@ messages = [
 ]
 ```
 
-### System Prompt
+### System Prompt Strategy
 
 The system prompt instructs the LLM to:
 
-1. Use `list_files` to explore the wiki directory structure
-2. Use `read_file` to read relevant wiki files
-3. Find the specific section that answers the question
-4. Include the source reference in format: `wiki/filename.md#section-anchor`
-5. Respond in the same language as the user's question
+1. **Choose the right tool:**
+   - `list_files`/`read_file` for wiki, source code, configuration
+   - `query_api` for live data, API behavior, bug diagnosis
+
+2. **For wiki questions:**
+   - Explore wiki directory with `list_files`
+   - Read relevant files with `read_file`
+   - Cite section anchors (e.g., `wiki/git-workflow.md#resolving-merge-conflicts`)
+
+3. **For source code questions:**
+   - Find relevant files with `list_files`
+   - Read code with `read_file`
+   - Extract answer from code
+
+4. **For bug diagnosis:**
+   - Reproduce error with `query_api`
+   - Read source code with `read_file`
+   - Explain root cause
+
+5. **Always cite sources** and respond in the user's language
 
 ## Implementation Details
 
@@ -218,30 +296,32 @@ The system prompt instructs the LLM to:
 
 | Function | Purpose |
 |----------|---------|
-| `load_config()` | Load configuration from `.env.agent.secret` |
+| `AgentConfig.load()` | Load config from both `.env` files |
 | `read_file(path)` | Tool: read file contents |
 | `list_files(path)` | Tool: list directory contents |
-| `get_tool_definitions()` | OpenAI function-calling schemas |
-| `execute_tool(name, args)` | Dispatch tool calls |
-| `call_llm_with_tools(messages, config, tools)` | LLM API call with tool support |
-| `run_agentic_loop(question, config)` | Main loop: call LLM, execute tools |
-| `extract_source_from_answer(answer)` | Extract source reference from LLM text |
+| `query_api(method, path, body, config)` | Tool: query backend API |
+| `get_tool_definitions()` | OpenAI tool schemas |
+| `execute_tool(name, args, config)` | Tool dispatcher |
+| `call_llm_with_tools(messages, config, tools)` | LLM API with tools |
+| `extract_source_from_answer(answer, tool_calls)` | Source extraction |
+| `run_agentic_loop(question, config)` | Main agentic loop |
 
 ### Code Structure
 
 ```
 agent.py
-├── AgentConfig           - Configuration class
-├── ToolResult            - Dataclass for tool results
-├── read_file()           - Tool: read file
-├── list_files()          - Tool: list directory
-├── is_safe_path()        - Security: path validation
-├── get_tool_definitions() - OpenAI tool schemas
-├── execute_tool()        - Tool dispatcher
-├── call_llm_with_tools() - LLM API with tools
+├── AgentConfig              - Configuration (loads both .env files)
+├── ToolResult               - Dataclass for tool results
+├── read_file()              - Tool: read file
+├── list_files()             - Tool: list directory
+├── query_api()              - Tool: query backend
+├── is_safe_path()           - Security: path validation
+├── get_tool_definitions()   - OpenAI tool schemas (3 tools)
+├── execute_tool()           - Tool dispatcher
+├── call_llm_with_tools()    - LLM API with tools
 ├── extract_source_from_answer() - Source extraction
-├── run_agentic_loop()    - Main agentic loop
-└── main()                - CLI entry point
+├── run_agentic_loop()       - Main agentic loop
+└── main()                   - CLI entry point
 ```
 
 ## Testing
@@ -249,16 +329,61 @@ agent.py
 ### Running Tests
 
 ```bash
-pytest tests/test_agent_task1.py tests/test_agent_task2.py -v
+pytest tests/test_agent_task1.py tests/test_agent_task2.py tests/test_agent_task3.py -v
 ```
 
 ### Test Coverage
 
-| Test | Question | Expected |
-|------|----------|----------|
-| Task 1 | "What is 2 + 2?" | Valid JSON with `answer` and `tool_calls` |
-| Task 2 #1 | "How do you resolve a merge conflict?" | `read_file` in tool_calls, `wiki/git-workflow.md` in source |
-| Task 2 #2 | "What files are in the wiki?" | `list_files` in tool_calls |
+| Test File | Question | Expected |
+|-----------|----------|----------|
+| `test_agent_task1.py` | "What is 2 + 2?" | Valid JSON with `answer` and `tool_calls` |
+| `test_agent_task2.py` #1 | "How do you resolve a merge conflict?" | `read_file` in tool_calls, `wiki/git-workflow.md` in source |
+| `test_agent_task2.py` #2 | "What files are in the wiki?" | `list_files` in tool_calls |
+| `test_agent_task3.py` #1 | "What framework does the backend use?" | `read_file` in tool_calls, answer contains "FastAPI" |
+| `test_agent_task3.py` #2 | "How many items are in the database?" | `query_api` in tool_calls, answer contains a number |
+
+## Benchmark Results
+
+### Local Evaluation
+
+Run the benchmark locally:
+
+```bash
+uv run run_eval.py
+```
+
+The benchmark tests 10 questions across all categories:
+
+- Wiki lookup (branch protection, SSH)
+- System facts (framework, API routers)
+- Data queries (item count, status codes)
+- Bug diagnosis (ZeroDivisionError, TypeError)
+- Reasoning (request lifecycle, ETL idempotency)
+
+### Lessons Learned
+
+1. **Tool descriptions matter:** Initially the LLM didn't use `query_api` for data questions. Adding explicit examples in the tool description ("Use this to get live data like item counts, scores, analytics") improved tool selection.
+
+2. **Error formatting is critical:** Raw HTTP errors confused the LLM. Formatting errors as structured JSON with clear status codes helped the LLM understand API responses.
+
+3. **Content limits prevent truncation:** Large files (like full API responses) were being truncated. Limiting file reads to 10,000 characters ensured the LLM received complete, focused information.
+
+4. **Two .env files require careful loading:** The agent must load LLM config from `.env.agent.secret` and backend config from `.env.docker.secret`. Using `pydantic-settings` with manual merging ensured both files are read correctly.
+
+5. **Source extraction needs fallbacks:** The LLM doesn't always include source references in the answer. Extracting from the last `read_file` call provides a reliable fallback.
+
+6. **Authentication is essential for query_api:** Without the `LMS_API_KEY`, API calls return 401 errors. The agent must read this key from `.env.docker.secret` and include it in the `Authorization` header.
+
+### Final Architecture
+
+The agent successfully handles:
+
+- **Wiki questions** by reading documentation with proper section anchors
+- **System facts** by analyzing source code (pyproject.toml, main.py)
+- **Data queries** by calling the live API with authentication
+- **Bug diagnosis** by combining API error responses with source code analysis
+
+The agentic loop allows multi-step reasoning: the LLM can call `query_api` to reproduce an error, then `read_file` to examine the source, and finally provide a diagnosis with the root cause.
 
 ## Error Handling
 
@@ -270,10 +395,10 @@ pytest tests/test_agent_task1.py tests/test_agent_task2.py -v
 
 All debug and error messages go to **stderr**. Only the final JSON goes to **stdout**.
 
-## Future Work (Task 3)
+## Future Work
 
-- Add more tools (query_api, search_code, etc.)
-- Implement conversation history
-- Add domain knowledge to system prompt
-- Support multi-turn conversations
-- Improve source extraction accuracy
+- Add more tools (search_code, run_tests, etc.)
+- Implement conversation history for multi-turn dialogs
+- Add domain knowledge to system prompt for better reasoning
+- Improve source extraction with section anchor detection
+- Support streaming responses for long answers
