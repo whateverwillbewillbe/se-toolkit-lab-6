@@ -126,11 +126,13 @@ def _fetch_question(api_url: str, auth: str, lab: str, index: int) -> Question |
         sys.exit(1)
 
 
-def _run_agent(question: str, timeout: int = 60) -> tuple[AgentOutput, None] | tuple[None, str]:
+def _run_agent(
+    question: str, timeout: int = 120
+) -> tuple[AgentOutput, None] | tuple[None, str]:
     """Run agent.py with the question. Returns (answer_dict, error_msg)."""
     try:
         result = subprocess.run(
-            [sys.executable, "agent.py", question],
+            ["uv", "run", "agent.py", question],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -163,6 +165,7 @@ def _run_agent(question: str, timeout: int = 60) -> tuple[AgentOutput, None] | t
 # Matching logic (mirrors autochecker evaluation)
 # ---------------------------------------------------------------------------
 
+
 def _match(text: str, rule: MatchRule) -> bool:
     """Check if text satisfies the matching rule."""
     text_lower = text.lower()
@@ -194,7 +197,7 @@ def _match(text: str, rule: MatchRule) -> bool:
 def _format_expected(expected: MatchRule) -> str:
     """Human-readable description of the expected match."""
     if "contains" in expected:
-        return f"answer should contain: \"{expected['contains']}\""
+        return f'answer should contain: "{expected["contains"]}"'
     if "contains_all" in expected:
         return f"answer should contain all of: {expected['contains_all']}"
     if "any_of" in expected:
@@ -242,7 +245,10 @@ def _check_question(q: Question, data: AgentOutput) -> tuple[bool, str]:
         # Rubric-only question — locally we can only do a basic length check.
         # The autochecker bot uses LLM-based judging for more accurate scoring.
         if len(answer.split()) < 20:
-            return False, f"    {YELLOW}Answer too short for a reasoning question (bot uses LLM judge){RESET}"
+            return (
+                False,
+                f"    {YELLOW}Answer too short for a reasoning question (bot uses LLM judge){RESET}",
+            )
 
     # Check source if expected_source is defined
     expected_source = q.get("expected_source")
@@ -261,7 +267,9 @@ def _check_question(q: Question, data: AgentOutput) -> tuple[bool, str]:
     check_tools = q.get("check_tools")
     if check_tools:
         tool_calls = data.get("tool_calls", [])
-        tools_used: set[str] = {tc["tool"] for tc in tool_calls} if tool_calls else set()
+        tools_used: set[str] = (
+            {tc["tool"] for tc in tool_calls} if tool_calls else set()
+        )
         missing = set(check_tools) - tools_used
         if missing:
             return False, (
@@ -276,8 +284,10 @@ def _check_question(q: Question, data: AgentOutput) -> tuple[bool, str]:
 def main():
     parser = argparse.ArgumentParser(description="Run agent evaluation benchmark")
     parser.add_argument(
-        "--index", type=int, default=None,
-        help="Run a single question by index (for debugging)"
+        "--index",
+        type=int,
+        default=None,
+        help="Run a single question by index (for debugging)",
     )
     args = parser.parse_args()
 

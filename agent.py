@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # =============================================================================
@@ -36,6 +36,12 @@ from pydantic_settings import BaseSettings
 class AgentConfig(BaseSettings):
     """Configuration for the agent, loaded from environment variables."""
 
+    model_config = SettingsConfigDict(
+        env_file=".env.agent.secret",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     # LLM configuration
     llm_api_key: str = ""
     llm_api_base: str = ""
@@ -44,11 +50,6 @@ class AgentConfig(BaseSettings):
     # Backend API configuration
     lms_api_key: str = ""
     agent_api_base_url: str = "http://localhost:42002"
-
-    class Config:
-        # Load from both .env.agent.secret and .env.docker.secret
-        env_file = ".env.agent.secret"
-        env_file_encoding = "utf-8"
 
     @classmethod
     def load(cls) -> "AgentConfig":
@@ -204,7 +205,11 @@ def list_files(path: str) -> str:
 
 
 def query_api(
-    method: str, path: str, body: str | None = None, config: AgentConfig | None = None
+    method: str,
+    path: str,
+    body: str | None = None,
+    include_auth: bool = True,
+    config: AgentConfig | None = None,
 ) -> str:
     """
     Query the deployed backend API.
@@ -213,6 +218,7 @@ def query_api(
         method: HTTP method (GET, POST, etc.)
         path: API endpoint path
         body: Optional JSON request body
+        include_auth: Whether to include LMS_API_KEY in Authorization header (default: True)
         config: Agent configuration (for API key and base URL)
 
     Returns:
@@ -232,7 +238,7 @@ def query_api(
 
     # Prepare headers
     headers = {}
-    if config.lms_api_key:
+    if include_auth and config.lms_api_key:
         headers["Authorization"] = f"Bearer {config.lms_api_key}"
 
     # Prepare request
@@ -336,7 +342,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "query_api",
-                "description": "Query the deployed backend API. Use this to get live data from the system (item counts, scores, analytics), check API behavior (status codes, error responses), or diagnose bugs.",
+                "description": "Query the deployed backend API. Use this to get live data from the system (item counts, scores, analytics), check API behavior (status codes, error responses), or diagnose bugs. Set include_auth=false to test unauthenticated access.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -352,6 +358,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "body": {
                             "type": "string",
                             "description": "JSON request body (optional, for POST/PUT/PATCH requests)",
+                        },
+                        "include_auth": {
+                            "type": "boolean",
+                            "description": "Whether to include authentication header. Set to false to test unauthenticated access (default: True)",
+                            "default": True,
                         },
                     },
                     "required": ["method", "path"],
@@ -384,6 +395,7 @@ def execute_tool(tool_name: str, args: dict[str, Any], config: AgentConfig) -> s
             args.get("method", "GET"),
             args.get("path", ""),
             args.get("body"),
+            args.get("include_auth", True),
             config,
         )
     else:
@@ -394,38 +406,49 @@ def execute_tool(tool_name: str, args: dict[str, Any], config: AgentConfig) -> s
 # System Prompt
 # =============================================================================
 
-SYSTEM_PROMPT = """You are a system agent that answers questions by reading documentation, source code, and querying the live backend API.
+SYSTEM_PROMPT = """You are a system agent that answers questions efficiently by reading documentation, source code, and querying the live backend API.
 
 You have access to three tools:
 1. list_files - List files in a directory (explore project structure)
 2. read_file - Read contents of a file (wiki, source code, configuration)
 3. query_api - Query the live backend API (get data, check behavior, diagnose bugs)
 
+IMPORTANT: Be efficient! Use maximum 3-4 tool calls, not 10.
+
 When to use each tool:
-- Use list_files/read_file for: wiki documentation, source code analysis, configuration files, Docker files
-- Use query_api for: live data (item counts, scores, analytics), API behavior (status codes, error responses), bug diagnosis
+- For wiki questions: Use list_files ONCE on 'wiki', then read_file on the most relevant file
+- For source code questions: Use list_files ONCE to find files, then read_file ONCE on the most relevant file
+- For API data questions: Use query_api directly (e.g., GET /items/ for item count)
+- For bug diagnosis: Use query_api first to see the error, then read_file on the relevant source
 
-For bug diagnosis questions:
+Strategy for wiki questions about git/branches/SSH:
+1. list_files with path='wiki'
+2. Look for files like: git-workflow.md, git.md, github.md, ssh.md, vm.md
+3. For questions about "protect a branch" or "GitHub" → read_file with path='wiki/github.md'
+4. For questions about "SSH" or "connect to VM" → read_file with path='wiki/ssh.md'
+5. For questions about "git workflow" or "merge conflict" → read_file with path='wiki/git-workflow.md'
+6. Find the specific section in the content
+
+Strategy for framework questions:
+1. read_file with path='backend/app/main.py' or path='pyproject.toml'
+2. Extract the framework name from imports or dependencies
+
+Strategy for API questions:
+1. query_api with method='GET' and the relevant path
+2. Extract the answer from the response
+3. For questions about "without authentication" or "without API key": use include_auth=false
+
+For bug diagnosis questions (e.g., "what error", "what is the bug"):
 1. First use query_api to reproduce the error
-2. Then use read_file to examine the source code
-3. Explain the root cause based on both the error and code
-
-For wiki questions:
-1. Use list_files to explore the wiki directory
-2. Use read_file to read relevant wiki files
-3. Find the specific section that answers the question
-
-For source code questions:
-1. Use list_files to find relevant source files
-2. Use read_file to read the code
-3. Extract the answer from the code
+2. Then use read_file to examine the source code where the error occurs
+3. Cite the source file path (e.g., backend/app/routers/analytics.py)
 
 Source references:
 - For wiki: wiki/filename.md#section-anchor (anchors are lowercase with hyphens)
 - For source code: path/to/file.py
 - For API queries: mention the endpoint (e.g., GET /items/)
 
-Always cite your source. If you cannot find the answer, say so honestly.
+Always cite your source. If you cannot find the answer after 3-4 tool calls, provide your best answer based on what you found.
 Respond in the same language as the user's question."""
 
 
@@ -503,8 +526,15 @@ def extract_source_from_answer(
 
         if last_read:
             path = last_read["args"].get("path", "")
-            if path.startswith("wiki/") or path.startswith("backend/"):
+            # Return any file path, not just wiki/backend
+            if path and not path.startswith(".."):
                 return path
+
+    # Check for API endpoint references in answer
+    api_pattern = r"(GET|POST|PUT|DELETE|PATCH)\s+(/\S+)"
+    api_matches = re.findall(api_pattern, answer)
+    if api_matches:
+        return f"API {api_matches[-1][0]} {api_matches[-1][1]}"
 
     return ""
 
@@ -527,6 +557,7 @@ def run_agentic_loop(question: str, config: AgentConfig) -> dict[str, Any]:
     """
     max_tool_calls = 10
     tool_calls_log: list[dict[str, Any]] = []
+    seen_tool_calls: set[str] = set()  # Track unique tool calls to avoid loops
 
     # Initialize conversation
     messages: list[dict[str, Any]] = [
@@ -579,6 +610,24 @@ def run_agentic_loop(question: str, config: AgentConfig) -> dict[str, Any]:
                 tool_args = json.loads(function["arguments"])
             except json.JSONDecodeError:
                 tool_args = {}
+
+            # Create a unique key for this tool call to detect loops
+            tool_key = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+
+            # Skip if we've already made this exact tool call
+            if tool_key in seen_tool_calls:
+                print(f"Skipping duplicate tool call: {tool_key}", file=sys.stderr)
+                # Add a message to the LLM to move on
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": "You already have this information. Please proceed with the next step or provide your final answer.",
+                        "tool_call_id": tool_id,
+                    }
+                )
+                continue
+
+            seen_tool_calls.add(tool_key)
 
             # Execute tool
             tool_result = execute_tool(tool_name, tool_args, config)

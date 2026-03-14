@@ -30,12 +30,12 @@ def run_agent(question: str) -> dict:
     project_root = Path(__file__).parent.parent
     agent_path = project_root / "agent.py"
 
-    # Run agent.py as subprocess
+    # Run agent.py as subprocess using uv
     result = subprocess.run(
-        [sys.executable, "-m", "uv", "run", str(agent_path), question],
+        ["uv", "run", str(agent_path), question],
         capture_output=True,
         text=True,
-        timeout=120,  # Longer timeout for agentic loop
+        timeout=timeout,
     )
 
     # Print stderr for debugging (won't affect test result)
@@ -43,7 +43,9 @@ def run_agent(question: str) -> dict:
         print(f"Agent stderr:\n{result.stderr}", file=sys.stderr)
 
     # Assert exit code is 0
-    assert result.returncode == 0, f"Agent exited with code {result.returncode}: {result.stderr}"
+    assert result.returncode == 0, (
+        f"Agent exited with code {result.returncode}: {result.stderr}"
+    )
 
     # Parse stdout as JSON
     try:
@@ -124,7 +126,9 @@ def test_wiki_listing_question():
     assert "list_files" in tool_names, "Agent should use list_files tool"
 
     # Check that list_files was called with wiki path
-    list_files_calls = [tc for tc in output["tool_calls"] if tc.get("tool") == "list_files"]
+    list_files_calls = [
+        tc for tc in output["tool_calls"] if tc.get("tool") == "list_files"
+    ]
     wiki_paths = [tc.get("args", {}).get("path", "") for tc in list_files_calls]
     assert any("wiki" in path for path in wiki_paths), (
         f"list_files should be called with wiki path, got: {wiki_paths}"
